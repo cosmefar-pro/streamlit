@@ -6,7 +6,6 @@ from json import loads
 import pandas as pd
 import requests
 import warnings
-import warnings
 import json
 
 # Suppress all warnings
