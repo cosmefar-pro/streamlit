@@ -1,31 +1,34 @@
 # Back-end:
-from datetime import datetime as dt
-from io import StringIO
-from json import loads
-# import pendulum as pdl
-import pandas as pd
+import streamlit as st
 import requests
-import warnings
+import pandas as pd
+import pendulum as pdl
+from datetime import datetime as dt
+import datetime
+from json import loads
 import json
+import warnings
+
 
 # Suppress all warnings
 warnings.filterwarnings('ignore')
 
 # Dataviz
-import streamlit as st
-import plotly.express as px
-from plotly import graph_objects as go
-import matplotlib.pyplot as plt
+
+# import plotly.express as px
+# from plotly import graph_objects as go
+# import matplotlib.pyplot as plt
 
 
 # Token
+token = "20229b6f-1a36-498f-a4f6-e7a5952aadcd"
 base_url = "https://api.exactspotter.com/v3/Leads"
 
 
 headers = {
     "Accept": "application/json",
     "Content-Type": "application/json",
-    "token_exact":  st.secrets["token"] # Secrets using streamlit
+    "token_exact": token,
 }
 
 params = {"$orderby": "registerDate desc"}
@@ -79,8 +82,21 @@ convert_datetime(df, "registerDate")
 # df['updateDate'] = df['updateDate'].apply(lambda x: dt.strptime(x.split('T')[0],date_format))
 # df['registerDate'] = df['registerDate'].apply(lambda x: dt.strptime(x.split('T')[0],date_format))
 
-# Get the current date and time
-current_date = pdl.now('America/Sao_Paulo')
+# # Get the current date and time
+# current_date = pdl.now('America/Sao_Paulo')
+
+# # Calculate the difference in days
+# df["Dias"] = (current_date - df["updateDate"]).dt.days
+
+# # Extract the month from the "updateDate" column
+# df["Mes"] = df["updateDate"].dt.month_name()
+
+# Get the current date and time with timezone information
+current_date = datetime.datetime.now() # Horário de Brasília
+
+# Convert the "updateDate" column to a tz-aware datetime, assuming it's in UTC
+df["updateDate"] = pd.to_datetime(df["updateDate"])
+df["registerDate"] = pd.to_datetime(df["registerDate"])
 
 # Calculate the difference in days
 df["Dias"] = (current_date - df["updateDate"]).dt.days
