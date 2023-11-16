@@ -26,7 +26,7 @@ base_url = "https://api.exactspotter.com/v3/Leads"
 headers = {
     "Accept": "application/json",
     "Content-Type": "application/json",
-    "token_exact": st.secrets.credentials.token, # Secrets using streamlit
+    "token_exact":  st.secrets["token"], # Secrets using streamlit
 }
 
 params = {"$orderby": "registerDate desc"}
