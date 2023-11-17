@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore')
 
 
 # Token
-token = "20229b6f-1a36-498f-a4f6-e7a5952aadcd"
+token = st.secrets["auth_token"]
 base_url = "https://api.exactspotter.com/v3/Leads"
 
 
