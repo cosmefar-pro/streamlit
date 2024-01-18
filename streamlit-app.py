@@ -1,112 +1,136 @@
-# Back-end:
+from datetime import datetime as datetime
+from pandas import DataFrame
+import pandas as pd
+import requests
+from json import loads
 import streamlit as st
 import requests
-import pandas as pd
 import pendulum as pdl
-from datetime import datetime as dt
-import datetime
 from json import loads
 import json
 import warnings
 
-
 # Suppress all warnings
 warnings.filterwarnings('ignore')
 
-# Dataviz
-
-# import plotly.express as px
-# from plotly import graph_objects as go
-# import matplotlib.pyplot as plt
-
+st.set_page_config(layout="wide") # Layout wide
 
 # Token
-token = st.secrets["auth_token"]
-base_url = "https://api.exactspotter.com/v3/Leads"
+exact_api_token = st.secrets["auth_token"]
+exact_endpoint = "https://api.exactspotter.com/v3/Leads"
 
+@st.cache_data
+def api_call(endpoint: str, api_token: str, skip_value: int = 0):
 
-headers = {
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-    "token_exact": token,
-}
+    query_params = {
+        '$skip': skip_value,
+        '$filter': "registerDate ge 2023-01-01T00:00:00.0000000Z and registerDate le 2024-01-17T23:59:59.9999999Z",
+        '$orderby': "registerDate desc"
+    }
 
-params = {"$orderby": "registerDate desc"}
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "token_exact": api_token,
+    }
 
-response = requests.get(base_url, headers=headers, params=params)
+    response = requests.get(endpoint, headers=headers, params=query_params)
 
-def process_response(response):
-    if response.status_code == 200:
-        # data = loads(response.content.decode("utf-8"))["value"]
-        # # st.dataframe(data)  # Exibir o DataFrame no Streamlit
-        # return data  # Return data if the status code is 200
-        json_data = json.loads(response.content.decode("utf-8"))
-        value = json_data.get('value')  # Access the 'value' key from the decoded JSON
-        return value
+    json_file = loads(response.content.decode('latin-1'))['value']
+    
+    return json_file
+
+def convert_and_parse(json_file, existing_dataframe=None) -> DataFrame:
+    df = pd.DataFrame(json_file)
+
+    df.dropna(subset=['registerDate', 'lead'], inplace=True)
+    
+    df['registerDate'] = df['registerDate'].apply(
+        lambda x: datetime.strptime(x.split('T')[0], '%Y-%m-%d')
+    )
+
+    df['sdr_name'] = df.apply(extract_sdr_info, axis=1)
+    df['salesrep_name'] = df.apply(extract_salesrep_info, axis=1)
+    df['source'] = df.apply(extract_source_info, axis=1)
+
+    dataframe = df[['id', 'lead', 'phone1',
+                            'website', 'leadProduct', 'stage', 'source', 'cnpj',
+                            'state', 'publicLink', 'country', 'sdr_name', 'salesrep_name', 'registerDate', 'updateDate']]
+
+    if existing_dataframe is not None:
+        existing_dataframe = pd.concat([existing_dataframe, dataframe], ignore_index=True)
+        return existing_dataframe
     else:
-        st.error(f"Erro na solicitação: {response.status_code}")
+        return dataframe
 
-data = process_response(response)
+def extract_sdr_info(lead):
+    sdr_info = lead.get("sdr", {})
+    sdr_name = sdr_info.get("name", "")
+    sdr_lastName = sdr_info.get("lastName", "")
+    return f"{sdr_name} {sdr_lastName}"
 
-df = pd.DataFrame(data)
+def extract_salesrep_info(lead):
+    salesrep_info = lead.get("salesRep", {})
+    salesrep_name = salesrep_info.get("name", "")
+    salesrep_lastName = salesrep_info.get("lastName", "")
+    return f"{salesrep_name} {salesrep_lastName}"
 
-columns = [
-    "registerDate",
-    "updateDate",
-    "lead",
-    "phone1",
-    "leadProduct",
-    "id",
-    "stage",
-    "cnpj",
-    "state",
-    "country",
-    "website",
-    "source",
-    "publicLink"
-]
+def extract_source_info(lead):
+    source_info = lead.get("source", {})
+    source = source_info.get("value", "")
+    return source
 
-# Rename the columns
-df = df[columns]
+if __name__ == "__main__":
+    skip_value = 0
+    total_records = 0
+    all_data = None
 
-def convert_datetime(df, column):
-    df[column] = pd.to_datetime(df[column])
-    df[column] = df[column].dt.tz_localize(None)  # Remove the timezone
-    df[column] = df[column].dt.strftime("%Y-%m-%d %I:%M:%S %p")
-    df[column] = pd.to_datetime(df[column])
+    while True:
+        json_data = api_call(exact_endpoint, exact_api_token, skip_value)
 
-convert_datetime(df, "updateDate")
-convert_datetime(df, "registerDate")
+        # Break out of the loop if no more records
+        if not json_data:
+            break
 
-# date_format = '%Y-%m-%d'
-# df['updateDate'] = df['updateDate'].apply(lambda x: dt.strptime(x.split('T')[0],date_format))
-# df['registerDate'] = df['registerDate'].apply(lambda x: dt.strptime(x.split('T')[0],date_format))
+        all_data = convert_and_parse(json_data, all_data)
 
-# # Get the current date and time
-# current_date = pdl.now('America/Sao_Paulo')
+        # Update skip_value for the next iteration
+        skip_value += 500
+        total_records += len(json_data)
 
-# # Calculate the difference in days
-# df["Dias"] = (current_date - df["updateDate"]).dt.days
+    # Save the entire DataFrame to a CSV file
+    # all_data.to_csv("dados_test_all.csv", index=False)
 
-# # Extract the month from the "updateDate" column
-# df["Mes"] = df["updateDate"].dt.month_name()
+    # print(f"Total records processed: {total_records}")
+    df = pd.DataFrame(data=all_data)
 
-# Get the current date and time with timezone information
-current_date = datetime.datetime.now() # Horário de Brasília
+    def convert_datetime(df, column):
+        df[column] = pd.to_datetime(df[column])
+        df[column] = df[column].dt.tz_localize(None)  # Remove the timezone
+        df[column] = df[column].dt.strftime("%Y-%m-%d %I:%M:%S %p")
+        df[column] = pd.to_datetime(df[column])
 
-# Convert the "updateDate" column to a tz-aware datetime, assuming it's in UTC
-df["updateDate"] = pd.to_datetime(df["updateDate"])
-df["registerDate"] = pd.to_datetime(df["registerDate"])
+    convert_datetime(df, "updateDate")
+    convert_datetime(df, "registerDate")
 
-# Calculate the difference in days
-df["Dias"] = (current_date - df["updateDate"]).dt.days
+    # Get the current date and time with timezone information
+    
+    current_date = datetime.now() # Horário de Brasília
 
-# Extract the month from the "updateDate" column
-df["Mes"] = df["updateDate"].dt.month_name()
+    # Convert the "updateDate" column to a tz-aware datetime, assuming it's in UTC
+    df["updateDate"] = pd.to_datetime(df["updateDate"])
+    df["registerDate"] = pd.to_datetime(df["registerDate"])
 
-dict_rename = {
-    "registerDate": "DataRegistro",
-    "updateDate": "DataAtualizacao",
+    # Calculate the difference in days
+    df["Diff"] = (current_date - df["updateDate"]).dt.days
+
+    # Extract the month from the "updateDate" column
+    df["Mes"] = df["updateDate"].dt.month_name()
+    df["Ano"] = df["updateDate"].dt.year
+
+    dict_rename = {
+    "registerDate": "Registrado",
+    "updateDate": "Atualizado",
     "lead": "Lead",
     "phone1": "Telefone",
     "leadProduct": "Produto",
@@ -117,150 +141,102 @@ dict_rename = {
     "country": "Pais",
     "website": "Site",
     "source": "Origem",
-    "publicLink": "LinkPublico",
-}
+    "publicLink": "Link",
+    "sdr_name": 'SDR',
+    "salesrep_name": 'Sales'
+    }
 
-# Rename the columns
-df = df.rename(columns=dict_rename)
+    # Rename the columns
+    df = df.rename(columns=dict_rename)
 
-# Reorder the columns
-order = ['Dias', 'Mes', 'Origem', 'Lead', 'Telefone', 'Produto', 'ID',
-         'Etapa', 'CNPJ', 'Estado', 'Pais', 'Site', 'LinkPublico', 'DataRegistro', 'DataAtualizacao']
+    order = ['Origem', 'Lead', 'Telefone', 'Produto', 'ID',
+         'Etapa', 'CNPJ', 'Estado', 'Pais', 'Site', 'Link', 'SDR', 'Sales', 'Diff', 'Mes', 'Ano', 'Registrado', 'Atualizado']
 
-df = df[order]
+    df = df[order]
 
-df.dropna(subset = ['DataRegistro', 'Lead'], inplace = True)
+    # Streamlit ----------------------------------------------------------------------------------------- > Construction
 
-# Handling the missing values and converting the data types
-def fillna(df, column):
-    df[column] = df[column].str.replace(' ', '')
-    df[column] = df[column].str.replace(' ', '')
-    df[column] = df[column].fillna("VAZIO").astype(str)
+    st.header('🔁 COSMEFAR CRM - Exact Spotted', divider='gray')
+    st.subheader('Leads')
 
-fillna(df, "Telefone")
-fillna(df, "Estado")
-fillna(df, "Produto")
-fillna(df, "Pais")
-fillna(df, "Site")
-fillna(df, "CNPJ")
+    # function to cleanup the fields of the multiselect widget
+    def clear_multi():
+        st.session_state.stage = []
+        st.session_state.month = []
+        st.session_state.year = []
+        st.session_state.sdr = []
+        return
 
-# Convert the columns to string
-df["ID"] = df["ID"].astype(str)
-df['Lead'] = df['Lead'].str.upper().astype(str)
-df['Origem'] = df['Origem'].str['value'].astype(str)
+    month_order = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ]
 
-# Streamlit ----------------------------------------------------------------------------------------- > Construction
+    with st.sidebar:
+        st.title('Filtros')
+    
 
-st. set_page_config(layout="wide") # Layout wide
+        # Adicione um novo filtro para pré-vendedora
+        selected_sdr = st.selectbox('Selecione o pré-vendedor', df['SDR'].unique(), placeholder="Selecione", key="selected_sdr", index=None)
 
-st.header('🔁 COSMEFAR CRM - Exact Spotted', divider='gray')
-st.subheader('Leads')
+        # Use a pré-vendedora selecionada para filtrar as opções nos outros filtros
+        filtered_stage_options = df[df['SDR'] == selected_sdr]['Etapa'].unique()
+        filtered_month_options = df[df['SDR'] == selected_sdr]['Mes'].unique()
+        filtered_year_options = df[df['SDR'] == selected_sdr]['Ano'].unique()
 
-# function to cleanup the fields of the multiselect widget
-def clear_multi():
-    st.session_state.stage = []
-    st.session_state.month = []
-    st.session_state.sources = []
-    return
+        stage = st.multiselect('Selecione a etapa', filtered_stage_options, placeholder="Escolha uma opção", key="stage")
+        month = st.multiselect('Selecione o mês', filtered_month_options, placeholder="Escolha uma opção", key="month")
+        year = st.multiselect('Selecione o ano', filtered_year_options, placeholder="Escolha uma opção", key="year")
 
-with st.sidebar:
-    st.title('Filtros')
-    stage = st.sidebar.multiselect('Selecione a etapa', df['Etapa'].unique(), placeholder="Escolha uma opção", key="stage") # filter by etapa
-    month = st.sidebar.multiselect('Selecione o mês', df['Mes'].unique(), placeholder="Escolha uma opção", key="month") # filter by mes
-    source = st.sidebar.multiselect('Selecione a origem', df['Origem'].unique(), placeholder="Escolha uma opção", key="source") # filter by origem
-    filters = st.sidebar.button('Filtrar')  # button to filter
-    clear_filters = st.sidebar.button('Limpar Filtros', on_click=clear_multi)  # button to clean filters
-    # st.session_state # verificando o estado da session
-    st.link_button("Ir para a Exact", "https://www.exactsales.com.br/prelogin.html")
+        filters = st.button('Filtrar')  # botão para filtrar
+        clear_filters = st.button('Limpar Filtros')  # botão para limpar filtros
 
-filtered_df = df # Dataframe for manipulation
+    # Restante do código permanece inalterado
 
-if stage and month and source:
-    filtered_df = df[df['Etapa'].isin(stage) & df['Mes'].isin(month) & df['Origem'].isin(source)]
-elif stage and month:
-    filtered_df = df[df['Etapa'].isin(stage) & df['Mes'].isin(month)]
-elif stage and source:
-    filtered_df = df[df['Etapa'].isin(stage) & df['Origem'].isin(source)]
-elif month and source:
-    filtered_df = df[df['Mes'].isin(month) & df['Origem'].isin(source)]
-elif stage:
-    filtered_df = df[df['Etapa'].isin(stage)]
-elif month:
-    filtered_df = df[df['Mes'].isin(month)]
-elif source:
-    filtered_df = df[df['Origem'].isin(source)]
-else:
-    filtered_df = df.copy()
+    filtered_df = df  # DataFrame para manipulação
 
-# Reset the filters
-if clear_filters:
-    stage = []
-    month = []
-    source = []
-    filtered_df = df
-
-# Function to color the rows
-def color_rows(val):
-    if val <= 3:
-        return 'background-color: green'
-    elif val > 3 and val < 7:
-        return 'background-color: yellow'
-    elif val >= 7:
-        return 'background-color: red'
+    # Aplique os filtros
+    if stage and month and year and selected_sdr:
+        filtered_df = df[(df['Etapa'].isin(stage)) & (df['Mes'].isin(month)) & (df['Ano'].isin(year)) & (df['SDR'] == selected_sdr)]
+    elif stage and month:
+        filtered_df = df[(df['Etapa'].isin(stage)) & (df['Mes'].isin(month))]
+    elif stage and year:
+        filtered_df = df[(df['Etapa'].isin(stage)) & (df['Ano'].isin(year))]
+    elif stage and selected_sdr:
+        filtered_df = df[(df['Etapa'].isin(stage)) & (df['SDR'] == selected_sdr)]
+    elif month and selected_sdr:
+        filtered_df = df[(df['Mes'].isin(month)) & (df['SDR'] == selected_sdr)]
+    elif month and year:
+        filtered_df = df[(df['Mes'].isin(month)) & (df['Ano'].isin(year))]
+    elif stage:
+        filtered_df = df[df['Etapa'].isin(stage)]
+    elif month:
+        filtered_df = df[df['Mes'].isin(month)]
+    elif year:
+        filtered_df = df[df['Ano'].isin(year)]
+    elif selected_sdr:
+        filtered_df = df[df['SDR'] == selected_sdr]
     else:
-        return ""
+        filtered_df = df.copy()
 
-# Ploting the DataFrame
+    # Reset the filters
+    if clear_filters:
+        stage = []
+        month = []
+        year = []
+        sdr = []
+        filtered_df = df
 
-st.dataframe(filtered_df.style.map(color_rows, subset=['Dias']))
+    # Rule: Function to color the rows
+    def color_rows(val):
+        if val <= 3:
+            return 'background-color: green'
+        elif val > 3 and val < 7:
+            return 'background-color: yellow'
+        elif val >= 7:
+            return 'background-color: red'
+        else:
+            return ""
 
-
-stage_order = [
-    'Entrada',
-    'Em contato',
-    'Aprovado F2',
-    'Reunião SDR',
-    'Qualificados',
-    'Reunião Vendas',
-    'Negociação',
-    'Descartado'
-]
-
-# Convert the 'Mes' column to a categorical data type with the custom sort order
-filtered_df['Etapa'] = pd.Categorical(filtered_df['Etapa'], categories=stage_order, ordered=True)
-
-col3, col4 = st.columns(2)
-
-with col3:
-    st.subheader('Média de dias por etapa')
-    etapa_media = filtered_df[['Dias', 'Etapa']].groupby(
-        'Etapa').mean().sort_values('Dias', ascending=False).round(0)
-    st.bar_chart(etapa_media)
-
-with col4:
-    st.subheader('Quantidade de leads por etapa')
-    etapa_count = filtered_df[['ID', 'Etapa']].groupby(
-        'Etapa').nunique().sort_values('ID', ascending=False).round(0)
-    st.bar_chart(etapa_count)
-
-month_order = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-]
-
-# Convert the 'Mes' column to a categorical data type with the custom sort order
-filtered_df['Mes'] = pd.Categorical(filtered_df['Mes'], categories=month_order, ordered=True)
-
-col1, col2 = st.columns(2)
-
-with col2:
-    st.subheader('Quantidade de Leads por mês')
-    mes_count = filtered_df[['Etapa', 'Mes']].groupby(
-        'Mes').count().sort_values('Mes', ascending=False).round(0)
-    st.bar_chart(mes_count)
-
-with col1:
-    st.subheader('Quantidade de Leads por origem')
-    origem_count = filtered_df[['ID', 'Origem']].groupby(
-        'Origem').count().sort_values('ID', ascending=False).round(0)
-    st.bar_chart(origem_count)
+    # Ploting the DataFrame
+    st.dataframe(filtered_df.style.map(color_rows, subset=['Diff']))
